@@ -1,24 +1,11 @@
 'use client'
 
-import { useState, useActionState } from 'react'
+import { useState, useEffect, useActionState } from 'react'
 import Link from 'next/link'
 import { createWedding, signOut } from '@/app/actions'
+import { copyToClipboard } from '@/lib/clipboard'
 import type { Wedding } from '@/types/database'
 import type { User } from '@supabase/supabase-js'
-
-function generateSlug(base: string) {
-  return (
-    base
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 30) +
-    '-' +
-    Math.random().toString(36).slice(2, 6)
-  )
-}
 
 export default function DashboardClient({
   user,
@@ -34,18 +21,19 @@ export default function DashboardClient({
 
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
 
-  function copyLink(slug: string) {
-    navigator.clipboard.writeText(`${baseUrl}/upload/${slug}`)
-    setCopied(slug)
-    setTimeout(() => setCopied(null), 2000)
-  }
-
-  async function handleCreate(formData: FormData) {
-    formData.append('slug', generateSlug(coupleNames || 'boda'))
-    await formAction(formData)
-    if (!state?.error) {
+  // Close the modal only once the server action actually succeeded.
+  useEffect(() => {
+    if (state?.success) {
       setShowCreate(false)
       setCoupleNames('')
+    }
+  }, [state])
+
+  async function copyLink(slug: string) {
+    const ok = await copyToClipboard(`${baseUrl}/upload/${slug}`)
+    if (ok) {
+      setCopied(slug)
+      setTimeout(() => setCopied(null), 2000)
     }
   }
 
@@ -136,7 +124,7 @@ export default function DashboardClient({
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
             <h3 className="text-lg font-semibold mb-5">Crear evento de boda</h3>
-            <form action={handleCreate} className="space-y-4">
+            <form action={formAction} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Nombre del evento

@@ -3,12 +3,18 @@ import { createClient } from '@/lib/supabase/server'
 import LoginForm from '@/components/LoginForm'
 
 export default async function HomePage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (user) redirect('/dashboard')
+  // If auth is unreachable we still render the login form instead of crashing.
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (user) redirect('/dashboard')
+  } catch (err) {
+    // redirect() throws internally — let it propagate.
+    if (err instanceof Error && err.message === 'NEXT_REDIRECT') throw err
+    if ((err as { digest?: string })?.digest?.startsWith('NEXT_REDIRECT')) throw err
+  }
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-rose-50 to-pink-100 flex items-center justify-center p-4">

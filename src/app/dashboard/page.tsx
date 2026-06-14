@@ -10,10 +10,12 @@ export default async function DashboardPage() {
 
   if (!user) redirect('/')
 
-  const { data: weddings } = await supabase
+  const { data: weddings, error } = await supabase
     .from('weddings')
     .select('*')
     .order('created_at', { ascending: false })
 
-  return <DashboardClient user={user} weddings={weddings || []} />
+  if (error) throw new Error('No se pudieron cargar tus bodas.')
+
+  return <DashboardClient user={user} weddings={weddings ?? []} />
 }

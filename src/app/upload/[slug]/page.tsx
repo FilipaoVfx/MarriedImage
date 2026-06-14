@@ -2,15 +2,24 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import UploadFunnel from '@/components/UploadFunnel'
 
-export default async function UploadPage({ params }: { params: { slug: string } }) {
+export default async function UploadPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+
+  if (!slug || slug.length > 64) notFound()
+
   const supabase = await createClient()
 
-  const { data: wedding } = await supabase
+  const { data: wedding, error } = await supabase
     .from('weddings')
     .select('id, name, couple_names, date')
-    .eq('slug', params.slug)
-    .single()
+    .eq('slug', slug)
+    .maybeSingle()
 
+  if (error) throw new Error('No se pudo cargar el evento.')
   if (!wedding) notFound()
 
   return <UploadFunnel wedding={wedding} />

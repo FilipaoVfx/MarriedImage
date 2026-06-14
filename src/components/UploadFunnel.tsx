@@ -2,6 +2,13 @@
 
 import { useState, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import {
+  isAcceptableImage,
+  safeExtension,
+  validateUploadInput,
+  MAX_FILE_BYTES,
+  MAX_FILES_PER_UPLOAD,
+} from '@/lib/validation'
 
 interface Props {
   wedding: {
@@ -32,11 +39,46 @@ export default function UploadFunnel({ wedding }: Props) {
   const supabase = createClient()
 
   function addFiles(incoming: File[]) {
-    const imageFiles = incoming.filter((f) => f.type.startsWith('image/'))
-    imageFiles.forEach((file) => {
+    setError(null)
+
+    const accepted: File[] = []
+    let rejectedType = 0
+    let rejectedSize = 0
+
+    for (const file of incoming) {
+      if (!file.type.startsWith('image/') && file.type !== '') {
+        rejectedType++
+        continue
+      }
+      if (!isAcceptableImage(file)) {
+        rejectedSize++
+        continue
+      }
+      accepted.push(file)
+    }
+
+    const room = MAX_FILES_PER_UPLOAD - items.length
+    if (room <= 0) {
+      setError(`Máximo ${MAX_FILES_PER_UPLOAD} fotos por envío.`)
+      return
+    }
+
+    const toAdd = accepted.slice(0, room)
+
+    if (rejectedType > 0) {
+      setError('Algunos archivos no son imágenes y se omitieron.')
+    } else if (rejectedSize > 0) {
+      setError(
+        `Algunas fotos superan los ${Math.round(MAX_FILE_BYTES / (1024 * 1024))} MB y se omitieron.`
+      )
+    } else if (accepted.length > room) {
+      setError(`Solo se añadieron ${room}; máximo ${MAX_FILES_PER_UPLOAD} fotos por envío.`)
+    }
+
+    toAdd.forEach((file) => {
       const reader = new FileReader()
       reader.onload = (e) => {
-        setItems((prev) => [...prev, { file, preview: e.target?.result as string }])
+        setItems((cur) => [...cur, { file, preview: e.target?.result as string }])
       }
       reader.readAsDataURL(file)
     })
@@ -59,43 +101,71 @@ export default function UploadFunnel({ wedding }: Props) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!uploaderName.trim() || items.length === 0) return
+    if (uploading) return
+
+    const validation = validateUploadInput({ uploaderName, message })
+    if (!validation.ok) {
+      setError(validation.error)
+      return
+    }
+    if (items.length === 0) {
+      setError('Selecciona al menos una foto.')
+      return
+    }
+
+    const { uploaderName: name, message: msg } = validation.value
 
     setUploading(true)
     setError(null)
     setProgress(0)
     setCurrentFile(0)
 
-    try {
-      for (let i = 0; i < items.length; i++) {
-        setCurrentFile(i + 1)
-        const { file } = items[i]
-        const ext = file.name.split('.').pop() ?? 'jpg'
-        const path = `${wedding.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+    let uploaded = 0
 
+    for (let i = 0; i < items.length; i++) {
+      setCurrentFile(i + 1)
+      const { file } = items[i]
+      const ext = safeExtension(file.name)
+      const path = `${wedding.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+
+      try {
         const { error: uploadErr } = await supabase.storage
           .from('wedding-photos')
-          .upload(path, file, { contentType: file.type })
+          .upload(path, file, {
+            contentType: file.type || 'image/jpeg',
+            upsert: false,
+          })
 
         if (uploadErr) throw uploadErr
 
         const { error: dbErr } = await supabase.from('photos').insert({
           wedding_id: wedding.id,
-          uploader_name: uploaderName.trim(),
-          message: message.trim() || null,
+          uploader_name: name,
+          message: msg,
           storage_path: path,
         })
 
-        if (dbErr) throw dbErr
+        if (dbErr) {
+          // Avoid leaving an orphaned file in storage if the row insert fails.
+          await supabase.storage.from('wedding-photos').remove([path]).catch(() => {})
+          throw dbErr
+        }
 
+        uploaded++
         setProgress(Math.round(((i + 1) / items.length) * 100))
+      } catch {
+        setUploading(false)
+        setError(
+          uploaded > 0
+            ? `Se subieron ${uploaded} de ${items.length}. Hubo un error con el resto; inténtalo de nuevo.`
+            : 'No se pudieron subir las fotos. Revisa tu conexión e inténtalo de nuevo.'
+        )
+        return
       }
-      setSuccess(true)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error al subir las fotos')
-    } finally {
-      setUploading(false)
     }
+
+    setUploading(false)
+    setSuccess(true)
   }
 
   if (success) {

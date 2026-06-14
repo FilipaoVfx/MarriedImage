@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { copyToClipboard } from '@/lib/clipboard'
 import type { Wedding, Photo } from '@/types/database'
 
 export default function WeddingGallery({
@@ -24,10 +25,12 @@ export default function WeddingGallery({
   const uploadUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/upload/${wedding.slug}` : ''
 
-  function copyLink() {
-    navigator.clipboard.writeText(uploadUrl)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+  async function copyLink() {
+    const ok = await copyToClipboard(uploadUrl)
+    if (ok) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
   }
 
   return (
