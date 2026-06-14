@@ -14,5 +14,6 @@ export interface Photo {
   uploader_name: string
   message: string | null
   storage_path: string
+  media_type: 'image' | 'video'
   created_at: string
 }

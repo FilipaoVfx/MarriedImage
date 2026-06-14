@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { copyToClipboard } from '@/lib/clipboard'
 import { deletePhoto, updatePhotoMeta } from '@/app/actions'
+import { cloudinaryVideoUrl, cloudinaryPosterUrl } from '@/lib/cloudinary.client'
 import type { Wedding, Photo } from '@/types/database'
 
 export default function WeddingGallery({
@@ -25,11 +26,6 @@ export default function WeddingGallery({
 
   const supabase = createClient()
 
-  function getPhotoUrl(path: string) {
-    const { data } = supabase.storage.from('wedding-photos').getPublicUrl(path)
-    return data.publicUrl
-  }
-
   const uploadUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/upload/${wedding.slug}` : ''
 
@@ -49,10 +45,16 @@ export default function WeddingGallery({
     setActionError(null)
   }
 
+  function getMediaUrl(photo: Photo) {
+    if (photo.media_type === 'video') return cloudinaryVideoUrl(photo.storage_path)
+    const { data } = supabase.storage.from('wedding-photos').getPublicUrl(photo.storage_path)
+    return data.publicUrl
+  }
+
   function handleDelete(photo: Photo) {
     setActionError(null)
     startTransition(async () => {
-      const result = await deletePhoto(photo.id, photo.storage_path, wedding.id)
+      const result = await deletePhoto(photo.id, photo.storage_path, wedding.id, photo.media_type)
       if (result?.error) {
         setActionError(result.error)
         return
@@ -98,7 +100,7 @@ export default function WeddingGallery({
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div>
             <p className="text-2xl font-semibold text-gray-800">
-              {photos.length} {photos.length === 1 ? 'foto recibida' : 'fotos recibidas'}
+              {photos.length} {photos.length === 1 ? 'archivo recibido' : 'archivos recibidos'}
             </p>
             <p className="text-sm text-gray-500 mt-1 font-mono break-all">{uploadUrl}</p>
           </div>
@@ -123,13 +125,28 @@ export default function WeddingGallery({
                 key={photo.id}
                 className="mb-3 break-inside-avoid group relative rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition"
               >
-                <img
-                  src={getPhotoUrl(photo.storage_path)}
-                  alt={`Foto de ${photo.uploader_name}`}
-                  className="w-full object-cover group-hover:scale-105 transition duration-300 cursor-pointer"
-                  loading="lazy"
-                  onClick={() => openPhoto(photo)}
-                />
+                {photo.media_type === 'video' ? (
+                  <video
+                    src={cloudinaryVideoUrl(photo.storage_path)}
+                    poster={cloudinaryPosterUrl(photo.storage_path)}
+                    className="w-full object-cover cursor-pointer"
+                    preload="none"
+                    onClick={() => openPhoto(photo)}
+                  />
+                ) : (
+                  <img
+                    src={getMediaUrl(photo)}
+                    alt={`Foto de ${photo.uploader_name}`}
+                    className="w-full object-cover group-hover:scale-105 transition duration-300 cursor-pointer"
+                    loading="lazy"
+                    onClick={() => openPhoto(photo)}
+                  />
+                )}
+                {photo.media_type === 'video' && (
+                  <span className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded-full pointer-events-none">
+                    ▶ Video
+                  </span>
+                )}
                 {/* Overlay con nombre + acciones rápidas */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition duration-200 flex flex-col justify-end p-3">
                   <div className="flex justify-between items-end">
@@ -184,13 +201,22 @@ export default function WeddingGallery({
             className="max-w-4xl w-full flex flex-col md:flex-row gap-4"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Imagen */}
-            <div className="flex-1">
-              <img
-                src={getPhotoUrl(selected.storage_path)}
-                alt=""
-                className="w-full rounded-2xl max-h-[75vh] object-contain"
-              />
+            {/* Media */}
+            <div className="flex-1 flex items-center justify-center">
+              {selected.media_type === 'video' ? (
+                <video
+                  src={cloudinaryVideoUrl(selected.storage_path)}
+                  poster={cloudinaryPosterUrl(selected.storage_path)}
+                  controls
+                  className="w-full rounded-2xl max-h-[75vh] object-contain"
+                />
+              ) : (
+                <img
+                  src={getMediaUrl(selected)}
+                  alt=""
+                  className="w-full rounded-2xl max-h-[75vh] object-contain"
+                />
+              )}
             </div>
 
             {/* Panel lateral con metadata + acciones */}
@@ -294,7 +320,7 @@ export default function WeddingGallery({
                   </div>
 
                   <a
-                    href={getPhotoUrl(selected.storage_path)}
+                    href={getMediaUrl(selected)}
                     download
                     target="_blank"
                     rel="noopener noreferrer"

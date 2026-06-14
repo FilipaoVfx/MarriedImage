@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { generateSlug, validateWeddingInput, isValidUUID } from '@/lib/validation'
+import { deleteCloudinaryVideo } from '@/lib/cloudinary.server'
 
 type ActionState = { error?: string; success?: boolean } | null
 
@@ -141,18 +142,27 @@ export async function deleteWedding(id: string): Promise<ActionState> {
     const { user, supabase } = await requireUser()
     if (!user) return { error: 'Tu sesión expiró.' }
 
-    // Fetch all photo paths before deleting so we can clean up Storage.
+    // Fetch all media before deleting so we can clean up both storages.
     const { data: photos } = await supabase
       .from('photos')
-      .select('storage_path')
+      .select('storage_path, media_type')
       .eq('wedding_id', id)
 
     if (photos && photos.length > 0) {
-      const paths = photos.map((p) => p.storage_path)
-      // Remove in batches of 100 (Supabase limit).
-      for (let i = 0; i < paths.length; i += 100) {
-        await supabase.storage.from('wedding-photos').remove(paths.slice(i, i + 100))
+      const imagePaths = photos
+        .filter((p) => p.media_type !== 'video')
+        .map((p) => p.storage_path)
+      const videoPaths = photos
+        .filter((p) => p.media_type === 'video')
+        .map((p) => p.storage_path)
+
+      // Remove Supabase images in batches of 100.
+      for (let i = 0; i < imagePaths.length; i += 100) {
+        await supabase.storage.from('wedding-photos').remove(imagePaths.slice(i, i + 100))
       }
+
+      // Remove Cloudinary videos (fire-and-forget per item).
+      await Promise.allSettled(videoPaths.map((id) => deleteCloudinaryVideo(id)))
     }
 
     // DB cascade handles photos rows.
@@ -176,7 +186,8 @@ export async function deleteWedding(id: string): Promise<ActionState> {
 export async function deletePhoto(
   photoId: string,
   storagePath: string,
-  weddingId: string
+  weddingId: string,
+  mediaType: 'image' | 'video' = 'image'
 ): Promise<ActionState> {
   if (!isValidUUID(photoId) || !isValidUUID(weddingId)) return { error: 'ID inválido.' }
 
@@ -192,12 +203,16 @@ export async function deletePhoto(
       .eq('owner_id', user.id)
       .maybeSingle()
 
-    if (!wedding) return { error: 'No tienes permiso para eliminar esta foto.' }
+    if (!wedding) return { error: 'No tienes permiso para eliminar este archivo.' }
 
-    await supabase.storage.from('wedding-photos').remove([storagePath])
+    if (mediaType === 'video') {
+      await deleteCloudinaryVideo(storagePath)
+    } else {
+      await supabase.storage.from('wedding-photos').remove([storagePath])
+    }
 
     const { error } = await supabase.from('photos').delete().eq('id', photoId)
-    if (error) return { error: 'No se pudo eliminar la foto.' }
+    if (error) return { error: 'No se pudo eliminar el archivo.' }
 
     revalidatePath(`/dashboard/${weddingId}`)
     return { success: true }

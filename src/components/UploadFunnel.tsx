@@ -9,6 +9,7 @@ import {
   MAX_FILE_BYTES,
   MAX_FILES_PER_UPLOAD,
 } from '@/lib/validation'
+import { uploadVideoToCloudinary } from '@/lib/cloudinary.client'
 
 interface Props {
   wedding: {
@@ -19,9 +20,12 @@ interface Props {
   }
 }
 
+const MAX_VIDEO_BYTES = 200 * 1024 * 1024 // 200 MB per video
+
 interface FilePreview {
   file: File
   preview: string
+  mediaType: 'image' | 'video'
 }
 
 export default function UploadFunnel({ wedding }: Props) {
@@ -41,46 +45,65 @@ export default function UploadFunnel({ wedding }: Props) {
   function addFiles(incoming: File[]) {
     setError(null)
 
-    const accepted: File[] = []
+    const accepted: { file: File; mediaType: 'image' | 'video' }[] = []
     let rejectedType = 0
     let rejectedSize = 0
 
     for (const file of incoming) {
-      if (!file.type.startsWith('image/') && file.type !== '') {
+      const isVideo = file.type.startsWith('video/')
+      const isImage = file.type.startsWith('image/') || file.type === ''
+
+      if (!isImage && !isVideo) {
         rejectedType++
         continue
       }
-      if (!isAcceptableImage(file)) {
+
+      if (isVideo && file.size > MAX_VIDEO_BYTES) {
         rejectedSize++
         continue
       }
-      accepted.push(file)
+
+      if (isImage && !isAcceptableImage(file)) {
+        rejectedSize++
+        continue
+      }
+
+      accepted.push({ file, mediaType: isVideo ? 'video' : 'image' })
     }
 
     const room = MAX_FILES_PER_UPLOAD - items.length
     if (room <= 0) {
-      setError(`Máximo ${MAX_FILES_PER_UPLOAD} fotos por envío.`)
+      setError(`Máximo ${MAX_FILES_PER_UPLOAD} archivos por envío.`)
       return
     }
 
     const toAdd = accepted.slice(0, room)
 
     if (rejectedType > 0) {
-      setError('Algunos archivos no son imágenes y se omitieron.')
+      setError('Algunos archivos no son imágenes ni videos y se omitieron.')
     } else if (rejectedSize > 0) {
       setError(
-        `Algunas fotos superan los ${Math.round(MAX_FILE_BYTES / (1024 * 1024))} MB y se omitieron.`
+        `Algunos archivos superan el límite (fotos: ${Math.round(MAX_FILE_BYTES / (1024 * 1024))} MB, videos: ${Math.round(MAX_VIDEO_BYTES / (1024 * 1024))} MB) y se omitieron.`
       )
     } else if (accepted.length > room) {
-      setError(`Solo se añadieron ${room}; máximo ${MAX_FILES_PER_UPLOAD} fotos por envío.`)
+      setError(`Solo se añadieron ${room}; máximo ${MAX_FILES_PER_UPLOAD} archivos por envío.`)
     }
 
-    toAdd.forEach((file) => {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        setItems((cur) => [...cur, { file, preview: e.target?.result as string }])
+    toAdd.forEach(({ file, mediaType }) => {
+      if (mediaType === 'video') {
+        // Use a blob URL for video preview instead of FileReader (much faster).
+        const preview = URL.createObjectURL(file)
+        setItems((cur) => [...cur, { file, preview, mediaType }])
+      } else {
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          setItems((cur) => [
+            ...cur,
+            { file, preview: e.target?.result as string, mediaType },
+          ])
+        }
+        reader.readAsDataURL(file)
       }
-      reader.readAsDataURL(file)
     })
   }
 
@@ -124,41 +147,60 @@ export default function UploadFunnel({ wedding }: Props) {
 
     for (let i = 0; i < items.length; i++) {
       setCurrentFile(i + 1)
-      const { file } = items[i]
-      const ext = safeExtension(file.name)
-      const path = `${wedding.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+      const { file, mediaType } = items[i]
 
       try {
-        const { error: uploadErr } = await supabase.storage
-          .from('wedding-photos')
-          .upload(path, file, {
-            contentType: file.type || 'image/jpeg',
-            upsert: false,
-          })
+        let storagePath: string
 
-        if (uploadErr) throw uploadErr
+        if (mediaType === 'video') {
+          // Upload video to Cloudinary with per-file progress.
+          const result = await uploadVideoToCloudinary(
+            file,
+            `marriedimage/${wedding.id}`,
+            (pct) => {
+              // Blend per-file progress into overall progress.
+              const base = Math.round((i / items.length) * 100)
+              setProgress(base + Math.round(pct / items.length))
+            }
+          )
+          storagePath = result.public_id
+        } else {
+          // Upload image to Supabase Storage.
+          const ext = safeExtension(file.name)
+          const path = `${wedding.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+
+          const { error: uploadErr } = await supabase.storage
+            .from('wedding-photos')
+            .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: false })
+
+          if (uploadErr) throw uploadErr
+          storagePath = path
+        }
 
         const { error: dbErr } = await supabase.from('photos').insert({
           wedding_id: wedding.id,
           uploader_name: name,
           message: msg,
-          storage_path: path,
+          storage_path: storagePath,
+          media_type: mediaType,
         })
 
         if (dbErr) {
-          // Avoid leaving an orphaned file in storage if the row insert fails.
-          await supabase.storage.from('wedding-photos').remove([path]).catch(() => {})
+          if (mediaType === 'image') {
+            await supabase.storage.from('wedding-photos').remove([storagePath]).catch(() => {})
+          }
           throw dbErr
         }
 
         uploaded++
         setProgress(Math.round(((i + 1) / items.length) * 100))
-      } catch {
+      } catch (err: unknown) {
         setUploading(false)
+        const msg2 = err instanceof Error ? err.message : ''
         setError(
           uploaded > 0
-            ? `Se subieron ${uploaded} de ${items.length}. Hubo un error con el resto; inténtalo de nuevo.`
-            : 'No se pudieron subir las fotos. Revisa tu conexión e inténtalo de nuevo.'
+            ? `Se subieron ${uploaded} de ${items.length}. Error: ${msg2 || 'inténtalo de nuevo.'}`
+            : `No se pudo subir el archivo. ${msg2 || 'Revisa tu conexión e inténtalo de nuevo.'}`
         )
         return
       }
@@ -329,12 +371,27 @@ export default function UploadFunnel({ wedding }: Props) {
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {items.map((item, i) => (
-                  <div key={i} className="relative aspect-square rounded-xl overflow-hidden">
-                    <img
-                      src={item.preview}
-                      className="w-full h-full object-cover"
-                      alt={`Foto ${i + 1}`}
-                    />
+                  <div key={i} className="relative aspect-square rounded-xl overflow-hidden bg-gray-100">
+                    {item.mediaType === 'video' ? (
+                      <video
+                        src={item.preview}
+                        className="w-full h-full object-cover"
+                        muted
+                        playsInline
+                        preload="metadata"
+                      />
+                    ) : (
+                      <img
+                        src={item.preview}
+                        className="w-full h-full object-cover"
+                        alt={`Foto ${i + 1}`}
+                      />
+                    )}
+                    {item.mediaType === 'video' && (
+                      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded-md">
+                        🎥
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeItem(i)}
