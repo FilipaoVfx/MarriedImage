@@ -27,7 +27,15 @@ export default function WeddingGallery({
   const supabase = createClient()
 
   const uploadUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/upload/${wedding.slug}` : ''
+    typeof window !== 'undefined' ? `${window.location.origin}/boda/${wedding.slug}` : ''
+
+  function whatsappMessage() {
+    return (
+      `💍 ¡Hola! Te invitamos a compartir tus fotos de la boda de *${wedding.couple_names}*.\n\n` +
+      `📸 Es muy fácil — solo haz clic en este enlace y sube tus fotos en segundos, ¡sin apps ni registro!\n\n` +
+      uploadUrl
+    )
+  }
 
   async function copyLink() {
     const ok = await copyToClipboard(uploadUrl)
@@ -35,6 +43,11 @@ export default function WeddingGallery({
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
+  }
+
+  function shareWhatsApp() {
+    const url = `https://wa.me/?text=${encodeURIComponent(whatsappMessage())}`
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   function openPhoto(photo: Photo) {
@@ -102,14 +115,22 @@ export default function WeddingGallery({
             <p className="text-2xl font-semibold text-gray-800">
               {photos.length} {photos.length === 1 ? 'archivo recibido' : 'archivos recibidos'}
             </p>
-            <p className="text-sm text-gray-500 mt-1 font-mono break-all">{uploadUrl}</p>
+            <p className="text-xs text-gray-400 mt-1 break-all">{uploadUrl}</p>
           </div>
-          <button
-            onClick={copyLink}
-            className="shrink-0 border border-rose-300 text-rose-500 hover:bg-rose-50 px-4 py-2 rounded-xl text-sm transition font-medium"
-          >
-            {copied ? '✓ Copiado' : 'Copiar enlace'}
-          </button>
+          <div className="flex gap-2 shrink-0">
+            <button
+              onClick={shareWhatsApp}
+              className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1db955] text-white px-4 py-2 rounded-xl text-sm transition font-medium"
+            >
+              <span>💬</span> WhatsApp
+            </button>
+            <button
+              onClick={copyLink}
+              className="border border-rose-300 text-rose-500 hover:bg-rose-50 px-4 py-2 rounded-xl text-sm transition font-medium"
+            >
+              {copied ? '✓ Copiado' : 'Copiar'}
+            </button>
+          </div>
         </div>
 
         {photos.length === 0 ? (

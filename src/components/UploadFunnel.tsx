@@ -31,8 +31,7 @@ interface FilePreview {
 }
 
 // ── VideoThumbnail ────────────────────────────────────────────────────────────
-// Inline preview card for a selected video. Supports tap-to-play on mobile
-// and click-to-play on desktop. Uses a blob URL so no upload happens yet.
+// Tap/click to play-pause. Uses blob URL — no upload happens at preview stage.
 
 function VideoThumbnail({ src }: { src: string }) {
   const [playing, setPlaying] = useState(false)
@@ -42,11 +41,8 @@ function VideoThumbnail({ src }: { src: string }) {
     e.preventDefault()
     e.stopPropagation()
     if (!ref.current) return
-    if (playing) {
-      ref.current.pause()
-    } else {
-      ref.current.play().catch(() => {})
-    }
+    if (playing) ref.current.pause()
+    else ref.current.play().catch(() => {})
   }
 
   return (
@@ -63,7 +59,6 @@ function VideoThumbnail({ src }: { src: string }) {
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
       />
-      {/* Play overlay — always visible when paused, fades on hover when playing */}
       <div
         className={`absolute inset-0 flex items-center justify-center transition-opacity cursor-pointer select-none ${
           playing ? 'opacity-0 hover:opacity-100' : 'bg-black/30'
@@ -76,7 +71,6 @@ function VideoThumbnail({ src }: { src: string }) {
           {playing ? '⏸' : '▶'}
         </span>
       </div>
-      {/* Video badge */}
       <span className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded-md pointer-events-none">
         🎥
       </span>
@@ -97,9 +91,9 @@ export default function UploadFunnel({ wedding }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
 
-  const galleryRef = useRef<HTMLInputElement>(null)  // image + video from library
-  const cameraRef = useRef<HTMLInputElement>(null)   // photo capture
-  const videoRef = useRef<HTMLInputElement>(null)    // video recording
+  const galleryRef = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
+  const videoRef = useRef<HTMLInputElement>(null)
 
   const supabase = createClient()
 
@@ -112,10 +106,8 @@ export default function UploadFunnel({ wedding }: Props) {
     for (const file of incoming) {
       const kind = detectMediaKind(file)
       if (!kind) { rejectedType++; continue }
-
       if (kind === 'video' && !isAcceptableVideo(file)) { rejectedSize++; continue }
       if (kind === 'image' && !isAcceptableImage(file)) { rejectedSize++; continue }
-
       accepted.push({ file, mediaType: kind })
     }
 
@@ -125,21 +117,17 @@ export default function UploadFunnel({ wedding }: Props) {
       return
     }
 
-    if (rejectedType > 0) {
-      setError('Algunos archivos no son imágenes ni videos y se omitieron.')
-    } else if (rejectedSize > 0) {
+    if (rejectedType > 0) setError('Algunos archivos no son imágenes ni videos y se omitieron.')
+    else if (rejectedSize > 0)
       setError(
-        `Algunos archivos superan el límite (fotos: ${MAX_FILE_BYTES / (1024 * 1024)} MB · videos: ${MAX_VIDEO_BYTES / (1024 * 1024)} MB) y se omitieron.`
+        `Algunos archivos superan el límite (fotos: ${MAX_FILE_BYTES / (1024 * 1024)} MB · videos: ${MAX_VIDEO_BYTES / (1024 * 1024)} MB).`
       )
-    } else if (accepted.length > room) {
-      setError(`Solo se añadieron ${room}; máximo ${MAX_FILES_PER_UPLOAD} archivos.`)
-    }
+    else if (accepted.length > room)
+      setError(`Solo se añadieron ${room}; máximo ${MAX_FILES_PER_UPLOAD}.`)
 
     accepted.slice(0, room).forEach(({ file, mediaType }) => {
       if (mediaType === 'video') {
-        // Blob URL is instant — no FileReader overhead for large video files.
-        const preview = URL.createObjectURL(file)
-        setItems((cur) => [...cur, { file, preview, mediaType }])
+        setItems((cur) => [...cur, { file, preview: URL.createObjectURL(file), mediaType }])
       } else {
         const reader = new FileReader()
         reader.onload = (e) =>
@@ -172,9 +160,7 @@ export default function UploadFunnel({ wedding }: Props) {
   }
 
   function clearAll() {
-    items.forEach((it) => {
-      if (it.mediaType === 'video') URL.revokeObjectURL(it.preview)
-    })
+    items.forEach((it) => { if (it.mediaType === 'video') URL.revokeObjectURL(it.preview) })
     setItems([])
   }
 
@@ -187,7 +173,6 @@ export default function UploadFunnel({ wedding }: Props) {
     if (items.length === 0) { setError('Selecciona al menos una foto o video.'); return }
 
     const { uploaderName: name, message: msg } = validation.value
-
     setUploading(true)
     setError(null)
     setProgress(0)
@@ -255,21 +240,22 @@ export default function UploadFunnel({ wedding }: Props) {
     setSuccess(true)
   }
 
-  // ── Success screen ──────────────────────────────────────────────────────────
+  // ── Success ─────────────────────────────────────────────────────────────────
 
   if (success) {
     const label = mediaLabel(items)
     return (
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50 flex items-center justify-center p-6">
         <div className="text-center max-w-sm">
-          <div className="text-8xl mb-6 animate-bounce">💌</div>
-          <h2 className="text-3xl font-semibold text-gray-800 mb-3">
+          <div className="text-8xl mb-4" style={{ animation: 'bounce 1s infinite' }}>💌</div>
+          <h2 className="text-3xl font-bold text-rose-700 mb-2">
             ¡Gracias, {uploaderName}!
           </h2>
-          <p className="text-gray-500 text-lg leading-relaxed">
-            {label} {items.length === 1 ? 'enviado' : 'enviados'} a{' '}
-            <span className="text-rose-500 font-semibold">{wedding.couple_names}</span>
+          <p className="text-gray-600 text-lg leading-relaxed mb-1">
+            {label} {items.length === 1 ? 'ya forma parte' : 'ya forman parte'} del recuerdo de
           </p>
+          <p className="text-rose-600 font-bold text-xl mb-6">{wedding.couple_names} 💕</p>
+          <p className="text-gray-400 text-sm mb-8">¡Que disfrutes de la celebración! 🥂</p>
           <button
             onClick={() => {
               clearAll()
@@ -277,16 +263,16 @@ export default function UploadFunnel({ wedding }: Props) {
               setMessage('')
               setProgress(0)
             }}
-            className="mt-8 bg-rose-500 hover:bg-rose-600 text-white font-medium px-8 py-3 rounded-2xl transition text-base"
+            className="bg-rose-500 hover:bg-rose-600 text-white font-medium px-8 py-3 rounded-2xl transition text-base"
           >
-            Enviar más
+            Enviar más fotos
           </button>
         </div>
       </div>
     )
   }
 
-  // ── Main form ───────────────────────────────────────────────────────────────
+  // ── Form ─────────────────────────────────────────────────────────────────────
 
   const weddingDate = wedding.date
     ? new Date(wedding.date + 'T12:00:00').toLocaleDateString('es-ES', {
@@ -297,50 +283,74 @@ export default function UploadFunnel({ wedding }: Props) {
     : null
 
   const currentItem = uploading ? items[currentFile - 1] : null
-  const currentKind = currentItem?.mediaType ?? 'foto'
+  const currentKind = currentItem?.mediaType ?? 'imagen'
   const submitLabel = mediaLabel(items)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50">
-      {/* Header */}
-      <div className="bg-white/80 backdrop-blur-sm border-b border-rose-100 px-4 py-5 text-center sticky top-0 z-10">
-        <div className="text-2xl mb-1">💍</div>
-        <h1 className="text-xl font-semibold text-rose-900">{wedding.couple_names}</h1>
-        {weddingDate && <p className="text-rose-400 text-xs mt-0.5">{weddingDate}</p>}
+
+      {/* ── Invitation hero ────────────────────────────────────────────────── */}
+      <div className="bg-white/60 backdrop-blur-sm border-b border-rose-100 px-6 py-8 text-center">
+        <div className="text-4xl mb-3">💍</div>
+        <h1 className="text-2xl font-bold text-rose-800 leading-tight">
+          {wedding.couple_names}
+        </h1>
+        {weddingDate && (
+          <p className="text-rose-500 text-sm font-medium mt-1">{weddingDate}</p>
+        )}
+        <p className="text-gray-600 mt-3 text-base leading-snug max-w-xs mx-auto">
+          Te invitan a compartir tus fotos y videos del gran día 🎉
+        </p>
       </div>
 
-      <div className="max-w-lg mx-auto px-4 py-6 pb-10">
-        <p className="text-center text-gray-600 mb-6 text-base">
-          Comparte tus mejores momentos de la boda 📸🎥
-        </p>
+      {/* ── How it works (3 steps) ─────────────────────────────────────────── */}
+      <div className="bg-white/40 border-b border-rose-100 px-4 py-4">
+        <div className="max-w-md mx-auto flex justify-around text-center gap-2">
+          {[
+            { n: '1', icon: '✍️', label: 'Tu nombre' },
+            { n: '2', icon: '📸', label: 'Tus fotos' },
+            { n: '3', icon: '💌', label: '¡Enviar!' },
+          ].map(({ n, icon, label }) => (
+            <div key={n} className="flex flex-col items-center gap-1">
+              <span className="text-2xl">{icon}</span>
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                {n}. {label}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
 
+      {/* ── Form ───────────────────────────────────────────────────────────── */}
+      <div className="max-w-lg mx-auto px-4 py-6 pb-12">
         <form onSubmit={handleSubmit} className="space-y-4">
+
           {/* Nombre */}
           <div className="bg-white rounded-2xl p-4 shadow-sm">
             <label className="block text-sm font-semibold text-gray-600 mb-2">
-              Tu nombre <span className="text-rose-400">*</span>
+              ¿Cómo te llamas? <span className="text-rose-400">*</span>
             </label>
             <input
               type="text"
               value={uploaderName}
               onChange={(e) => setUploaderName(e.target.value)}
               required
-              placeholder="¿Cómo te llamas?"
+              placeholder="Tu nombre"
               autoComplete="given-name"
               className="w-full border border-gray-200 rounded-xl px-4 py-3.5 text-base focus:outline-none focus:ring-2 focus:ring-rose-300 transition"
             />
           </div>
 
-          {/* Mensaje */}
+          {/* Mensaje opcional */}
           <div className="bg-white rounded-2xl p-4 shadow-sm">
             <label className="block text-sm font-semibold text-gray-600 mb-2">
-              Mensaje para los novios{' '}
+              Un mensaje para los novios{' '}
               <span className="text-gray-400 font-normal">(opcional)</span>
             </label>
             <textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              placeholder="¡Felicidades! Que sean muy felices..."
+              placeholder="¡Felicidades! Que sean muy felices…"
               rows={2}
               className="w-full border border-gray-200 rounded-xl px-4 py-3.5 text-base focus:outline-none focus:ring-2 focus:ring-rose-300 resize-none transition"
             />
@@ -349,78 +359,54 @@ export default function UploadFunnel({ wedding }: Props) {
           {/* Selección de archivos */}
           <div className="bg-white rounded-2xl p-4 shadow-sm">
             <label className="block text-sm font-semibold text-gray-600 mb-3">
-              Fotos y videos <span className="text-rose-400">*</span>
+              Elige tus fotos o videos <span className="text-rose-400">*</span>
             </label>
 
             <div className="grid grid-cols-3 gap-2 mb-3">
-              {/* Tomar foto con cámara */}
               <button
                 type="button"
                 onClick={() => cameraRef.current?.click()}
-                className="flex flex-col items-center justify-center gap-1.5 bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white rounded-2xl py-4 transition font-medium text-xs"
+                className="flex flex-col items-center justify-center gap-1.5 bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white rounded-2xl py-5 transition font-medium text-xs"
               >
                 <span className="text-2xl">📷</span>
                 <span>Tomar foto</span>
               </button>
 
-              {/* Grabar video con cámara */}
               <button
                 type="button"
                 onClick={() => videoRef.current?.click()}
-                className="flex flex-col items-center justify-center gap-1.5 bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white rounded-2xl py-4 transition font-medium text-xs"
+                className="flex flex-col items-center justify-center gap-1.5 bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white rounded-2xl py-5 transition font-medium text-xs"
               >
                 <span className="text-2xl">🎥</span>
                 <span>Grabar video</span>
               </button>
 
-              {/* Desde galería (fotos y videos) */}
               <button
                 type="button"
                 onClick={() => galleryRef.current?.click()}
-                className="flex flex-col items-center justify-center gap-1.5 border-2 border-rose-200 hover:border-rose-400 hover:bg-rose-50 active:bg-rose-100 text-rose-600 rounded-2xl py-4 transition font-medium text-xs"
+                className="flex flex-col items-center justify-center gap-1.5 border-2 border-rose-200 hover:border-rose-400 hover:bg-rose-50 active:bg-rose-100 text-rose-600 rounded-2xl py-5 transition font-medium text-xs"
               >
                 <span className="text-2xl">🖼️</span>
-                <span>Galería</span>
+                <span>Mi galería</span>
               </button>
             </div>
 
-            {/* Drag-and-drop (desktop) */}
+            {/* Drag-and-drop — desktop only */}
             <div
               onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
               onDragLeave={() => setDragging(false)}
               onDrop={handleDrop}
-              className={`hidden sm:flex border-2 border-dashed rounded-xl p-4 text-center flex-col items-center justify-center transition ${
+              className={`hidden sm:flex border-2 border-dashed rounded-xl p-4 flex-col items-center justify-center transition ${
                 dragging ? 'border-rose-400 bg-rose-50' : 'border-gray-200'
               }`}
             >
-              <p className="text-gray-400 text-sm">Arrastra fotos o videos aquí</p>
+              <p className="text-gray-400 text-sm">O arrastra aquí tus fotos y videos</p>
             </div>
 
-            {/* Hidden inputs */}
-            <input
-              ref={cameraRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <input
-              ref={videoRef}
-              type="file"
-              accept="video/*"
-              capture="environment"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <input
-              ref={galleryRef}
-              type="file"
-              accept="image/*,video/*"
-              multiple
-              onChange={handleFileChange}
-              className="hidden"
-            />
+            {/* Hidden file inputs */}
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" onChange={handleFileChange} className="hidden" />
+            <input ref={videoRef} type="file" accept="video/*" capture="environment" onChange={handleFileChange} className="hidden" />
+            <input ref={galleryRef} type="file" accept="image/*,video/*" multiple onChange={handleFileChange} className="hidden" />
           </div>
 
           {/* Preview grid */}
@@ -430,28 +416,17 @@ export default function UploadFunnel({ wedding }: Props) {
                 <p className="text-sm font-semibold text-gray-600">
                   {submitLabel} {items.length === 1 ? 'seleccionado' : 'seleccionados'}
                 </p>
-                <button
-                  type="button"
-                  onClick={clearAll}
-                  className="text-xs text-gray-400 hover:text-red-500 transition"
-                >
-                  Eliminar todos
+                <button type="button" onClick={clearAll} className="text-xs text-gray-400 hover:text-red-500 transition">
+                  Quitar todos
                 </button>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {items.map((item, i) => (
-                  <div
-                    key={i}
-                    className="relative aspect-square rounded-xl overflow-hidden bg-gray-100"
-                  >
+                  <div key={i} className="relative aspect-square rounded-xl overflow-hidden bg-gray-100">
                     {item.mediaType === 'video' ? (
                       <VideoThumbnail src={item.preview} />
                     ) : (
-                      <img
-                        src={item.preview}
-                        className="w-full h-full object-cover"
-                        alt={`Foto ${i + 1}`}
-                      />
+                      <img src={item.preview} className="w-full h-full object-cover" alt={`Foto ${i + 1}`} />
                     )}
                     <button
                       type="button"
@@ -462,7 +437,6 @@ export default function UploadFunnel({ wedding }: Props) {
                     </button>
                   </div>
                 ))}
-                {/* Add more button */}
                 <button
                   type="button"
                   onClick={() => galleryRef.current?.click()}
@@ -474,13 +448,12 @@ export default function UploadFunnel({ wedding }: Props) {
             </div>
           )}
 
-          {/* Upload progress */}
+          {/* Progress */}
           {uploading && (
             <div className="bg-white rounded-2xl p-4 shadow-sm space-y-2">
               <div className="flex justify-between text-sm text-gray-600 font-medium">
                 <span>
-                  Subiendo {currentKind === 'video' ? 'video' : 'foto'} {currentFile} de{' '}
-                  {items.length}…
+                  Enviando {currentKind === 'video' ? 'video' : 'foto'} {currentFile} de {items.length}…
                 </span>
                 <span>{progress}%</span>
               </div>
@@ -491,7 +464,7 @@ export default function UploadFunnel({ wedding }: Props) {
                 />
               </div>
               {currentKind === 'video' && (
-                <p className="text-xs text-gray-400">Los videos pueden tardar un poco más…</p>
+                <p className="text-xs text-gray-400">Los videos tardan un poco más, ¡ya casi!</p>
               )}
             </div>
           )}
@@ -506,14 +479,18 @@ export default function UploadFunnel({ wedding }: Props) {
           <button
             type="submit"
             disabled={uploading || items.length === 0 || !uploaderName.trim()}
-            className="w-full bg-rose-500 hover:bg-rose-600 active:bg-rose-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-semibold py-5 rounded-2xl transition text-lg shadow-sm"
+            className="w-full bg-rose-500 hover:bg-rose-600 active:bg-rose-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold py-5 rounded-2xl transition text-lg shadow-sm"
           >
             {uploading
               ? `Enviando… ${progress}%`
               : items.length === 0
-              ? 'Selecciona fotos o videos'
-              : `Enviar ${submitLabel} 💌`}
+              ? '📸 Selecciona tus fotos o videos'
+              : `💌 Enviar ${submitLabel} al álbum`}
           </button>
+
+          <p className="text-center text-xs text-gray-400 pb-2">
+            Tus fotos se guardan de forma segura y solo los novios pueden verlas 🔒
+          </p>
         </form>
       </div>
     </div>
