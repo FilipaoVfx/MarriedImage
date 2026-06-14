@@ -7,8 +7,13 @@ import {
   validateWeddingInput,
   validateUploadInput,
   isAcceptableImage,
+  isAcceptableVideo,
+  detectMediaKind,
+  mediaCounts,
+  mediaLabel,
   safeExtension,
   MAX_FILE_BYTES,
+  MAX_VIDEO_BYTES,
   MAX_FILES_PER_UPLOAD,
 } from './validation'
 
@@ -208,5 +213,119 @@ describe('upload limits constants', () => {
   it('exposes sane defaults', () => {
     expect(MAX_FILES_PER_UPLOAD).toBeGreaterThan(0)
     expect(MAX_FILE_BYTES).toBeGreaterThan(1024 * 1024)
+    expect(MAX_VIDEO_BYTES).toBeGreaterThan(MAX_FILE_BYTES)
+  })
+})
+
+describe('isAcceptableVideo', () => {
+  it('accepts a normal mp4 under the size limit', () => {
+    expect(isAcceptableVideo({ type: 'video/mp4', size: 10_000_000 })).toBe(true)
+  })
+
+  it('accepts mov and webm', () => {
+    expect(isAcceptableVideo({ type: 'video/quicktime', size: 50_000_000 })).toBe(true)
+    expect(isAcceptableVideo({ type: 'video/webm', size: 5_000_000 })).toBe(true)
+  })
+
+  it('rejects zero-byte videos', () => {
+    expect(isAcceptableVideo({ type: 'video/mp4', size: 0 })).toBe(false)
+  })
+
+  it('rejects videos over the 200 MB limit', () => {
+    expect(isAcceptableVideo({ type: 'video/mp4', size: MAX_VIDEO_BYTES + 1 })).toBe(false)
+  })
+
+  it('accepts a video right at the size limit', () => {
+    expect(isAcceptableVideo({ type: 'video/mp4', size: MAX_VIDEO_BYTES })).toBe(true)
+  })
+
+  it('rejects image mime types', () => {
+    expect(isAcceptableVideo({ type: 'image/jpeg', size: 1_000_000 })).toBe(false)
+  })
+
+  it('rejects empty mime type (unlike images, empty means unknown for video)', () => {
+    expect(isAcceptableVideo({ type: '', size: 1_000_000 })).toBe(false)
+  })
+})
+
+describe('detectMediaKind', () => {
+  it('identifies mp4 as video', () => {
+    expect(detectMediaKind({ type: 'video/mp4' })).toBe('video')
+  })
+
+  it('identifies quicktime as video', () => {
+    expect(detectMediaKind({ type: 'video/quicktime' })).toBe('video')
+  })
+
+  it('identifies jpeg as image', () => {
+    expect(detectMediaKind({ type: 'image/jpeg' })).toBe('image')
+  })
+
+  it('identifies webp as image', () => {
+    expect(detectMediaKind({ type: 'image/webp' })).toBe('image')
+  })
+
+  it('treats empty type as image (HEIC on iOS)', () => {
+    expect(detectMediaKind({ type: '' })).toBe('image')
+  })
+
+  it('returns null for unsupported types', () => {
+    expect(detectMediaKind({ type: 'application/pdf' })).toBeNull()
+    expect(detectMediaKind({ type: 'text/plain' })).toBeNull()
+    expect(detectMediaKind({ type: 'audio/mpeg' })).toBeNull()
+  })
+})
+
+describe('mediaCounts', () => {
+  it('counts images and videos separately', () => {
+    const items = [
+      { mediaType: 'image' as const },
+      { mediaType: 'video' as const },
+      { mediaType: 'image' as const },
+    ]
+    expect(mediaCounts(items)).toEqual({ images: 2, videos: 1 })
+  })
+
+  it('handles all-image list', () => {
+    const items = Array(5).fill({ mediaType: 'image' as const })
+    expect(mediaCounts(items)).toEqual({ images: 5, videos: 0 })
+  })
+
+  it('handles all-video list', () => {
+    const items = Array(3).fill({ mediaType: 'video' as const })
+    expect(mediaCounts(items)).toEqual({ images: 0, videos: 3 })
+  })
+
+  it('returns zeros for empty list', () => {
+    expect(mediaCounts([])).toEqual({ images: 0, videos: 0 })
+  })
+})
+
+describe('mediaLabel', () => {
+  it('shows only photos when no videos', () => {
+    const items = [{ mediaType: 'image' as const }, { mediaType: 'image' as const }]
+    expect(mediaLabel(items)).toBe('2 fotos')
+  })
+
+  it('uses singular for one photo', () => {
+    expect(mediaLabel([{ mediaType: 'image' as const }])).toBe('1 foto')
+  })
+
+  it('shows only videos when no images', () => {
+    const items = [{ mediaType: 'video' as const }]
+    expect(mediaLabel(items)).toBe('1 video')
+  })
+
+  it('combines fotos and videos with dot separator', () => {
+    const items = [
+      { mediaType: 'image' as const },
+      { mediaType: 'video' as const },
+      { mediaType: 'video' as const },
+    ]
+    expect(mediaLabel(items)).toBe('1 foto · 2 videos')
+  })
+
+  it('returns empty string for empty list', () => {
+    expect(mediaLabel([])).toBe('')
   })
 })

@@ -105,6 +105,7 @@ export function validateUploadInput(raw: {
 }
 
 export const MAX_FILE_BYTES = 15 * 1024 * 1024 // 15 MB
+export const MAX_VIDEO_BYTES = 200 * 1024 * 1024 // 200 MB
 export const MAX_FILES_PER_UPLOAD = 30
 export const ALLOWED_IMAGE_TYPES = [
   'image/jpeg',
@@ -119,6 +120,44 @@ export function isAcceptableImage(file: { type: string; size: number }): boolean
   if (file.size <= 0 || file.size > MAX_FILE_BYTES) return false
   // Some browsers report empty type for HEIC; accept anything starting with image/
   return file.type === '' || file.type.startsWith('image/')
+}
+
+export function isAcceptableVideo(file: { type: string; size: number }): boolean {
+  if (file.size <= 0 || file.size > MAX_VIDEO_BYTES) return false
+  return file.type.startsWith('video/')
+}
+
+/**
+ * Identifies whether a file is an image, video, or unsupported type.
+ * Empty MIME type is treated as image (HEIC on some iOS browsers).
+ */
+export function detectMediaKind(file: { type: string }): 'image' | 'video' | null {
+  if (file.type.startsWith('video/')) return 'video'
+  if (file.type.startsWith('image/') || file.type === '') return 'image'
+  return null
+}
+
+/** Counts images and videos in a mixed file list. */
+export function mediaCounts(items: Array<{ mediaType: 'image' | 'video' }>): {
+  images: number
+  videos: number
+} {
+  let images = 0
+  let videos = 0
+  for (const item of items) {
+    if (item.mediaType === 'image') images++
+    else videos++
+  }
+  return { images, videos }
+}
+
+/** Human-readable label, e.g. "2 fotos · 1 video". */
+export function mediaLabel(items: Array<{ mediaType: 'image' | 'video' }>): string {
+  const { images, videos } = mediaCounts(items)
+  const parts: string[] = []
+  if (images > 0) parts.push(`${images} ${images === 1 ? 'foto' : 'fotos'}`)
+  if (videos > 0) parts.push(`${videos} ${videos === 1 ? 'video' : 'videos'}`)
+  return parts.join(' · ')
 }
 
 export function safeExtension(filename: string): string {

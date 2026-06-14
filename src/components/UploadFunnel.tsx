@@ -4,9 +4,13 @@ import { useState, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   isAcceptableImage,
+  isAcceptableVideo,
+  detectMediaKind,
+  mediaLabel,
   safeExtension,
   validateUploadInput,
   MAX_FILE_BYTES,
+  MAX_VIDEO_BYTES,
   MAX_FILES_PER_UPLOAD,
 } from '@/lib/validation'
 import { uploadVideoToCloudinary } from '@/lib/cloudinary.client'
@@ -20,13 +24,67 @@ interface Props {
   }
 }
 
-const MAX_VIDEO_BYTES = 200 * 1024 * 1024 // 200 MB per video
-
 interface FilePreview {
   file: File
   preview: string
   mediaType: 'image' | 'video'
 }
+
+// ── VideoThumbnail ────────────────────────────────────────────────────────────
+// Inline preview card for a selected video. Supports tap-to-play on mobile
+// and click-to-play on desktop. Uses a blob URL so no upload happens yet.
+
+function VideoThumbnail({ src }: { src: string }) {
+  const [playing, setPlaying] = useState(false)
+  const ref = useRef<HTMLVideoElement>(null)
+
+  function toggle(e: React.MouseEvent | React.TouchEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!ref.current) return
+    if (playing) {
+      ref.current.pause()
+    } else {
+      ref.current.play().catch(() => {})
+    }
+  }
+
+  return (
+    <div className="relative w-full h-full bg-gray-900">
+      <video
+        ref={ref}
+        src={src}
+        className="w-full h-full object-cover"
+        playsInline
+        muted
+        preload="metadata"
+        loop
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+      />
+      {/* Play overlay — always visible when paused, fades on hover when playing */}
+      <div
+        className={`absolute inset-0 flex items-center justify-center transition-opacity cursor-pointer select-none ${
+          playing ? 'opacity-0 hover:opacity-100' : 'bg-black/30'
+        }`}
+        onClick={toggle}
+        onTouchEnd={toggle}
+        aria-label={playing ? 'Pausar' : 'Reproducir'}
+      >
+        <span className="bg-black/60 text-white w-10 h-10 rounded-full flex items-center justify-center text-base pointer-events-none">
+          {playing ? '⏸' : '▶'}
+        </span>
+      </div>
+      {/* Video badge */}
+      <span className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded-md pointer-events-none">
+        🎥
+      </span>
+    </div>
+  )
+}
+
+// ── UploadFunnel ──────────────────────────────────────────────────────────────
 
 export default function UploadFunnel({ wedding }: Props) {
   const [uploaderName, setUploaderName] = useState('')
@@ -38,37 +96,27 @@ export default function UploadFunnel({ wedding }: Props) {
   const [success, setSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
-  const galleryRef = useRef<HTMLInputElement>(null)
-  const cameraRef = useRef<HTMLInputElement>(null)
+
+  const galleryRef = useRef<HTMLInputElement>(null)  // image + video from library
+  const cameraRef = useRef<HTMLInputElement>(null)   // photo capture
+  const videoRef = useRef<HTMLInputElement>(null)    // video recording
+
   const supabase = createClient()
 
   function addFiles(incoming: File[]) {
     setError(null)
-
     const accepted: { file: File; mediaType: 'image' | 'video' }[] = []
     let rejectedType = 0
     let rejectedSize = 0
 
     for (const file of incoming) {
-      const isVideo = file.type.startsWith('video/')
-      const isImage = file.type.startsWith('image/') || file.type === ''
+      const kind = detectMediaKind(file)
+      if (!kind) { rejectedType++; continue }
 
-      if (!isImage && !isVideo) {
-        rejectedType++
-        continue
-      }
+      if (kind === 'video' && !isAcceptableVideo(file)) { rejectedSize++; continue }
+      if (kind === 'image' && !isAcceptableImage(file)) { rejectedSize++; continue }
 
-      if (isVideo && file.size > MAX_VIDEO_BYTES) {
-        rejectedSize++
-        continue
-      }
-
-      if (isImage && !isAcceptableImage(file)) {
-        rejectedSize++
-        continue
-      }
-
-      accepted.push({ file, mediaType: isVideo ? 'video' : 'image' })
+      accepted.push({ file, mediaType: kind })
     }
 
     const room = MAX_FILES_PER_UPLOAD - items.length
@@ -77,31 +125,28 @@ export default function UploadFunnel({ wedding }: Props) {
       return
     }
 
-    const toAdd = accepted.slice(0, room)
-
     if (rejectedType > 0) {
       setError('Algunos archivos no son imágenes ni videos y se omitieron.')
     } else if (rejectedSize > 0) {
       setError(
-        `Algunos archivos superan el límite (fotos: ${Math.round(MAX_FILE_BYTES / (1024 * 1024))} MB, videos: ${Math.round(MAX_VIDEO_BYTES / (1024 * 1024))} MB) y se omitieron.`
+        `Algunos archivos superan el límite (fotos: ${MAX_FILE_BYTES / (1024 * 1024)} MB · videos: ${MAX_VIDEO_BYTES / (1024 * 1024)} MB) y se omitieron.`
       )
     } else if (accepted.length > room) {
-      setError(`Solo se añadieron ${room}; máximo ${MAX_FILES_PER_UPLOAD} archivos por envío.`)
+      setError(`Solo se añadieron ${room}; máximo ${MAX_FILES_PER_UPLOAD} archivos.`)
     }
 
-    toAdd.forEach(({ file, mediaType }) => {
+    accepted.slice(0, room).forEach(({ file, mediaType }) => {
       if (mediaType === 'video') {
-        // Use a blob URL for video preview instead of FileReader (much faster).
+        // Blob URL is instant — no FileReader overhead for large video files.
         const preview = URL.createObjectURL(file)
         setItems((cur) => [...cur, { file, preview, mediaType }])
       } else {
         const reader = new FileReader()
-        reader.onload = (e) => {
+        reader.onload = (e) =>
           setItems((cur) => [
             ...cur,
             { file, preview: e.target?.result as string, mediaType },
           ])
-        }
         reader.readAsDataURL(file)
       }
     })
@@ -119,7 +164,18 @@ export default function UploadFunnel({ wedding }: Props) {
   }, [])
 
   function removeItem(index: number) {
-    setItems((prev) => prev.filter((_, i) => i !== index))
+    setItems((prev) => {
+      const removed = prev[index]
+      if (removed.mediaType === 'video') URL.revokeObjectURL(removed.preview)
+      return prev.filter((_, i) => i !== index)
+    })
+  }
+
+  function clearAll() {
+    items.forEach((it) => {
+      if (it.mediaType === 'video') URL.revokeObjectURL(it.preview)
+    })
+    setItems([])
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -127,14 +183,8 @@ export default function UploadFunnel({ wedding }: Props) {
     if (uploading) return
 
     const validation = validateUploadInput({ uploaderName, message })
-    if (!validation.ok) {
-      setError(validation.error)
-      return
-    }
-    if (items.length === 0) {
-      setError('Selecciona al menos una foto.')
-      return
-    }
+    if (!validation.ok) { setError(validation.error); return }
+    if (items.length === 0) { setError('Selecciona al menos una foto o video.'); return }
 
     const { uploaderName: name, message: msg } = validation.value
 
@@ -153,26 +203,21 @@ export default function UploadFunnel({ wedding }: Props) {
         let storagePath: string
 
         if (mediaType === 'video') {
-          // Upload video to Cloudinary with per-file progress.
           const result = await uploadVideoToCloudinary(
             file,
             `marriedimage/${wedding.id}`,
             (pct) => {
-              // Blend per-file progress into overall progress.
               const base = Math.round((i / items.length) * 100)
               setProgress(base + Math.round(pct / items.length))
             }
           )
           storagePath = result.public_id
         } else {
-          // Upload image to Supabase Storage.
           const ext = safeExtension(file.name)
           const path = `${wedding.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
-
           const { error: uploadErr } = await supabase.storage
             .from('wedding-photos')
             .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: false })
-
           if (uploadErr) throw uploadErr
           storagePath = path
         }
@@ -200,7 +245,7 @@ export default function UploadFunnel({ wedding }: Props) {
         setError(
           uploaded > 0
             ? `Se subieron ${uploaded} de ${items.length}. Error: ${msg2 || 'inténtalo de nuevo.'}`
-            : `No se pudo subir el archivo. ${msg2 || 'Revisa tu conexión e inténtalo de nuevo.'}`
+            : `No se pudo subir el archivo. ${msg2 || 'Revisa tu conexión.'}`
         )
         return
       }
@@ -210,7 +255,10 @@ export default function UploadFunnel({ wedding }: Props) {
     setSuccess(true)
   }
 
+  // ── Success screen ──────────────────────────────────────────────────────────
+
   if (success) {
+    const label = mediaLabel(items)
     return (
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50 flex items-center justify-center p-6">
         <div className="text-center max-w-sm">
@@ -219,27 +267,26 @@ export default function UploadFunnel({ wedding }: Props) {
             ¡Gracias, {uploaderName}!
           </h2>
           <p className="text-gray-500 text-lg leading-relaxed">
-            Tus fotos fueron enviadas a{' '}
+            {label} {items.length === 1 ? 'enviado' : 'enviados'} a{' '}
             <span className="text-rose-500 font-semibold">{wedding.couple_names}</span>
-          </p>
-          <p className="text-gray-400 text-sm mt-2">
-            {items.length} foto{items.length !== 1 ? 's' : ''} compartida{items.length !== 1 ? 's' : ''} con éxito
           </p>
           <button
             onClick={() => {
+              clearAll()
               setSuccess(false)
-              setItems([])
               setMessage('')
               setProgress(0)
             }}
             className="mt-8 bg-rose-500 hover:bg-rose-600 text-white font-medium px-8 py-3 rounded-2xl transition text-base"
           >
-            Enviar más fotos
+            Enviar más
           </button>
         </div>
       </div>
     )
   }
+
+  // ── Main form ───────────────────────────────────────────────────────────────
 
   const weddingDate = wedding.date
     ? new Date(wedding.date + 'T12:00:00').toLocaleDateString('es-ES', {
@@ -248,6 +295,10 @@ export default function UploadFunnel({ wedding }: Props) {
         year: 'numeric',
       })
     : null
+
+  const currentItem = uploading ? items[currentFile - 1] : null
+  const currentKind = currentItem?.mediaType ?? 'foto'
+  const submitLabel = mediaLabel(items)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50">
@@ -260,7 +311,7 @@ export default function UploadFunnel({ wedding }: Props) {
 
       <div className="max-w-lg mx-auto px-4 py-6 pb-10">
         <p className="text-center text-gray-600 mb-6 text-base">
-          Comparte tus mejores momentos de la boda 📸
+          Comparte tus mejores momentos de la boda 📸🎥
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -295,35 +346,45 @@ export default function UploadFunnel({ wedding }: Props) {
             />
           </div>
 
-          {/* Botones de subida: cámara + galería */}
+          {/* Selección de archivos */}
           <div className="bg-white rounded-2xl p-4 shadow-sm">
             <label className="block text-sm font-semibold text-gray-600 mb-3">
-              Tus fotos <span className="text-rose-400">*</span>
+              Fotos y videos <span className="text-rose-400">*</span>
             </label>
 
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              {/* Cámara directa */}
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              {/* Tomar foto con cámara */}
               <button
                 type="button"
                 onClick={() => cameraRef.current?.click()}
-                className="flex flex-col items-center justify-center gap-2 bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white rounded-2xl py-5 transition font-medium text-sm"
+                className="flex flex-col items-center justify-center gap-1.5 bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white rounded-2xl py-4 transition font-medium text-xs"
               >
-                <span className="text-3xl">📷</span>
+                <span className="text-2xl">📷</span>
                 <span>Tomar foto</span>
               </button>
 
-              {/* Galería */}
+              {/* Grabar video con cámara */}
+              <button
+                type="button"
+                onClick={() => videoRef.current?.click()}
+                className="flex flex-col items-center justify-center gap-1.5 bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white rounded-2xl py-4 transition font-medium text-xs"
+              >
+                <span className="text-2xl">🎥</span>
+                <span>Grabar video</span>
+              </button>
+
+              {/* Desde galería (fotos y videos) */}
               <button
                 type="button"
                 onClick={() => galleryRef.current?.click()}
-                className="flex flex-col items-center justify-center gap-2 border-2 border-rose-200 hover:border-rose-400 hover:bg-rose-50 active:bg-rose-100 text-rose-600 rounded-2xl py-5 transition font-medium text-sm"
+                className="flex flex-col items-center justify-center gap-1.5 border-2 border-rose-200 hover:border-rose-400 hover:bg-rose-50 active:bg-rose-100 text-rose-600 rounded-2xl py-4 transition font-medium text-xs"
               >
-                <span className="text-3xl">🖼️</span>
-                <span>Desde galería</span>
+                <span className="text-2xl">🖼️</span>
+                <span>Galería</span>
               </button>
             </div>
 
-            {/* Zona drag-and-drop (desktop) */}
+            {/* Drag-and-drop (desktop) */}
             <div
               onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
               onDragLeave={() => setDragging(false)}
@@ -332,10 +393,10 @@ export default function UploadFunnel({ wedding }: Props) {
                 dragging ? 'border-rose-400 bg-rose-50' : 'border-gray-200'
               }`}
             >
-              <p className="text-gray-400 text-sm">O arrastra fotos aquí</p>
+              <p className="text-gray-400 text-sm">Arrastra fotos o videos aquí</p>
             </div>
 
-            {/* Inputs ocultos */}
+            {/* Hidden inputs */}
             <input
               ref={cameraRef}
               type="file"
@@ -345,9 +406,17 @@ export default function UploadFunnel({ wedding }: Props) {
               className="hidden"
             />
             <input
+              ref={videoRef}
+              type="file"
+              accept="video/*"
+              capture="environment"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <input
               ref={galleryRef}
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               multiple
               onChange={handleFileChange}
               className="hidden"
@@ -359,27 +428,24 @@ export default function UploadFunnel({ wedding }: Props) {
             <div className="bg-white rounded-2xl p-4 shadow-sm">
               <div className="flex justify-between items-center mb-3">
                 <p className="text-sm font-semibold text-gray-600">
-                  {items.length} foto{items.length !== 1 ? 's' : ''} seleccionada{items.length !== 1 ? 's' : ''}
+                  {submitLabel} {items.length === 1 ? 'seleccionado' : 'seleccionados'}
                 </p>
                 <button
                   type="button"
-                  onClick={() => setItems([])}
+                  onClick={clearAll}
                   className="text-xs text-gray-400 hover:text-red-500 transition"
                 >
-                  Eliminar todas
+                  Eliminar todos
                 </button>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {items.map((item, i) => (
-                  <div key={i} className="relative aspect-square rounded-xl overflow-hidden bg-gray-100">
+                  <div
+                    key={i}
+                    className="relative aspect-square rounded-xl overflow-hidden bg-gray-100"
+                  >
                     {item.mediaType === 'video' ? (
-                      <video
-                        src={item.preview}
-                        className="w-full h-full object-cover"
-                        muted
-                        playsInline
-                        preload="metadata"
-                      />
+                      <VideoThumbnail src={item.preview} />
                     ) : (
                       <img
                         src={item.preview}
@@ -387,20 +453,16 @@ export default function UploadFunnel({ wedding }: Props) {
                         alt={`Foto ${i + 1}`}
                       />
                     )}
-                    {item.mediaType === 'video' && (
-                      <div className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded-md">
-                        🎥
-                      </div>
-                    )}
                     <button
                       type="button"
                       onClick={() => removeItem(i)}
-                      className="absolute top-1 right-1 bg-black/60 text-white w-7 h-7 rounded-full text-base flex items-center justify-center font-bold leading-none"
+                      className="absolute top-1 right-1 bg-black/60 text-white w-6 h-6 rounded-full text-sm flex items-center justify-center font-bold leading-none z-10"
                     >
                       ×
                     </button>
                   </div>
                 ))}
+                {/* Add more button */}
                 <button
                   type="button"
                   onClick={() => galleryRef.current?.click()}
@@ -412,11 +474,14 @@ export default function UploadFunnel({ wedding }: Props) {
             </div>
           )}
 
-          {/* Progreso */}
+          {/* Upload progress */}
           {uploading && (
             <div className="bg-white rounded-2xl p-4 shadow-sm space-y-2">
               <div className="flex justify-between text-sm text-gray-600 font-medium">
-                <span>Subiendo foto {currentFile} de {items.length}...</span>
+                <span>
+                  Subiendo {currentKind === 'video' ? 'video' : 'foto'} {currentFile} de{' '}
+                  {items.length}…
+                </span>
                 <span>{progress}%</span>
               </div>
               <div className="w-full bg-gray-100 rounded-full h-3">
@@ -425,6 +490,9 @@ export default function UploadFunnel({ wedding }: Props) {
                   style={{ width: `${progress}%` }}
                 />
               </div>
+              {currentKind === 'video' && (
+                <p className="text-xs text-gray-400">Los videos pueden tardar un poco más…</p>
+              )}
             </div>
           )}
 
@@ -434,17 +502,17 @@ export default function UploadFunnel({ wedding }: Props) {
             </div>
           )}
 
-          {/* Botón enviar */}
+          {/* Submit */}
           <button
             type="submit"
             disabled={uploading || items.length === 0 || !uploaderName.trim()}
             className="w-full bg-rose-500 hover:bg-rose-600 active:bg-rose-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-semibold py-5 rounded-2xl transition text-lg shadow-sm"
           >
             {uploading
-              ? `Enviando... ${progress}%`
+              ? `Enviando… ${progress}%`
               : items.length === 0
-              ? 'Selecciona fotos para enviar'
-              : `Enviar ${items.length} foto${items.length !== 1 ? 's' : ''} 💌`}
+              ? 'Selecciona fotos o videos'
+              : `Enviar ${submitLabel} 💌`}
           </button>
         </form>
       </div>
