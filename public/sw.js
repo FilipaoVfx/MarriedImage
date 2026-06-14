@@ -16,6 +16,9 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const { request } = e
+
+  // Solo manejar peticiones HTTP/HTTPS (filtrar chrome-extension://, etc.)
+  if (!request.url.startsWith('http')) return
   if (request.method !== 'GET') return
   if (request.url.includes('supabase.co')) return
   if (request.url.includes('_next/')) return
@@ -23,8 +26,10 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     fetch(request)
       .then((res) => {
-        const clone = res.clone()
-        caches.open(CACHE).then((c) => c.put(request, clone))
+        if (res.ok) {
+          const clone = res.clone()
+          caches.open(CACHE).then((c) => c.put(request, clone))
+        }
         return res
       })
       .catch(() => caches.match(request))
