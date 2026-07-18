@@ -13,6 +13,7 @@ export default async function DashboardPage() {
   const { data: weddings, error } = await supabase
     .from('weddings')
     .select('*')
+    .eq('owner_id', user.id)
     .order('created_at', { ascending: false })
 
   if (error) throw new Error('No se pudieron cargar tus bodas.')

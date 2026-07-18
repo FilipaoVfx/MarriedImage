@@ -24,6 +24,7 @@ export default async function WeddingPage({
     .from('weddings')
     .select('*')
     .eq('id', weddingId)
+    .eq('owner_id', user.id)
     .maybeSingle()
 
   if (weddingError) throw new Error('No se pudo cargar la boda.')
